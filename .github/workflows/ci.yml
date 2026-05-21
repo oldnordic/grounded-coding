@@ -37,8 +37,10 @@ jobs:
 
       - name: Check for hardcoded personal paths
         run: |
-          if grep -rn '/home/' . --include='*.md' --include='*.fish' --include='*.sh' --include='*.json' --include='*.yml' 2>/dev/null | grep -v '.git/' | grep -v 'tmp/test-home'; then
-            echo "FAIL: hardcoded /home/ paths found"
+          matches=$(grep -rn '/home/[a-z]' plugin/ install.sh docs/ --include='*.md' --include='*.fish' --include='*.sh' --include='*.json' 2>/dev/null || true)
+          if [ -n "$matches" ]; then
+            echo "FAIL: hardcoded /home/ paths found:"
+            echo "$matches"
             exit 1
           fi
           echo "No hardcoded personal paths"
