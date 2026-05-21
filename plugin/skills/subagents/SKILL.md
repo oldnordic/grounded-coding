@@ -70,7 +70,7 @@ cat > ".claude/handoffs/${AGENT_ID}-$(date +%s).json" << 'EOF'
 {
   "status": "NEEDS_CONTEXT",
   "from_agent": "agent-1",
-  "project": "forge",
+  "project": "myapp",
   "context_remaining_pct": 15,
   "what_was_done": ["..."],
   "remaining_work": ["..."],

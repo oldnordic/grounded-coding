@@ -165,20 +165,16 @@ magellan context impact --db <db> --name "symbol" --depth 3
 
 ## Per-Project Databases
 
-| Project | Database Path |
-|---------|---------------|
-| magellan | `~/Projects/magellan/.magellan/magellan.db` |
-| llmgrep | `~/Projects/llmgrep/.magellan/llmgrep.db` |
-| mirage | `~/Projects/mirage/.magellan/mirage.db` |
-| splice | `~/Projects/splice/.magellan/splice.db` |
-| envoy | `~/Projects/envoy/.magellan/envoy.db` |
-| sqlitegraph | `~/Projects/sqlitegraph/.magellan/sqlitegraph.db` |
-| geographdb-core | `~/Projects/geographdb-core/.magellan/geographdb.db` |
-| codemcp | `~/Projects/codemcp/.magellan/codemcp.db` |
+Each project gets its own database at `.magellan/<project>.db` in the project root.
+
+```bash
+# Example: for a project called "myapp"
+magellan watch --root ./src --db .magellan/myapp.db --scan-initial
+```
 
 **Convention:** All projects use `.magellan/<project>.db` in their root directory.
 
-When using `grounded-context`, pass `--db <project-root>/.magellan/<project>.db` unless the project actually uses `.magellan/magellan.db`.
+When using `grounded-context`, pass `--db <project-root>/.magellan/<project>.db`.
 
 ---
 

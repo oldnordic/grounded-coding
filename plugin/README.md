@@ -36,7 +36,7 @@ Install this plugin from the Claude Code marketplace. On first run, the setup sk
 ### Option 2: Standalone CLI
 
 ```bash
-curl -fsSL https://github.com/luizspies/grounded-coding/install.sh | sh
+curl -fsSL https://github.com/oldnordic/grounded-coding/install.sh | sh
 ```
 
 ### Option 3: Cargo

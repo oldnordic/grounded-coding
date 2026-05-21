@@ -28,7 +28,7 @@ Install from the Claude Code marketplace. The setup skill handles everything.
 ### Standalone CLI
 
 ```bash
-curl -fsSL https://github.com/luizspies/grounded-coding/install.sh | sh
+curl -fsSL https://github.com/oldnordic/grounded-coding/install.sh | sh
 ```
 
 ### From Source
@@ -40,7 +40,7 @@ cargo install magellan llmgrep mirage-analyzer splice
 ### Contributors
 
 ```bash
-git clone https://github.com/luizspies/grounded-coding
+git clone https://github.com/oldnordic/grounded-coding
 cd grounded-coding
 ./install.sh --dev
 ```

@@ -92,7 +92,7 @@ jobs:
             ### Install
 
             ```bash
-            curl -fsSL https://github.com/luizspies/grounded-coding/install.sh | sh
+            curl -fsSL https://github.com/oldnordic/grounded-coding/install.sh | sh
             ```
 
             ### What's Included

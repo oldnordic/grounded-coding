@@ -94,13 +94,13 @@ curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/messages/{messag
 
 ### Query knowledge (discoveries + handoffs for a target)
 ```bash
-curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/knowledge?target=patch_symbol&project=forge"
+curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/knowledge?target=patch_symbol&project=myapp"
 ```
 Returns: `{"target":"patch_symbol","discoveries":[...],"handoffs":[...],"token_savings":{...}}`
 
 ### Semantic search
 ```bash
-curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/search?q=CFG+analysis&k=5&project=forge"
+curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/search?q=CFG+analysis&k=5&project=myapp"
 ```
 Returns: `{"results":[...],"total":...}`
 
@@ -112,7 +112,7 @@ curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/discove
     "agent": "claude1",
     "discovery_type": "Symbol",
     "target": "patch_symbol",
-    "project_id": "forge",
+    "project_id":"myapp",
     "metadata": {"file": "src/edit/mod.rs", "line": 42, "complexity": 8}
   }'
 ```
@@ -120,7 +120,7 @@ Returns: `{"discovery_id":204,"agent":"claude1","target":"patch_symbol","discove
 
 ### List discoveries for a target
 ```bash
-curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/discoveries?target=patch_symbol&project=forge"
+curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/discoveries?target=patch_symbol&project=myapp"
 ```
 
 ---
@@ -137,7 +137,7 @@ Returns: `{"task_id":42,"status":"TODO"}`
 
 ### List tasks
 ```bash
-curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/tasks?project=forge&status=IN_PROGRESS"
+curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/tasks?project=myapp&status=IN_PROGRESS"
 ```
 Returns: `{"tasks":[...]}`
 
@@ -175,7 +175,7 @@ curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/tasks/4
 
 ### Get pending handoff
 ```bash
-curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/handoffs/pending?agent=claude1&project=forge"
+curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/handoffs/pending?agent=claude1&project=myapp"
 ```
 Returns: `{"handoff":null}` or `{"handoff":{"id":7,"from_agent":"hermes","manifest":{...}}}`
 
@@ -189,7 +189,7 @@ Returns: `{"claimed":true,"handoff_id":7}`
 ```bash
 curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/handoffs \
   -H "Content-Type: application/json" \
-  -d '{"from_agent":"claude1","to_agent":"claude2","project_id":"forge","manifest":{"status":"partial","files_changed":["src/edit/mod.rs"]}}'
+  -d '{"from_agent":"claude1","to_agent":"claude2","project_id":"myapp","manifest":{"status":"partial","files_changed":["src/edit/mod.rs"]}}'
 ```
 
 ---
@@ -238,7 +238,7 @@ curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/ontolog
 ```bash
 curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/import-magellan/symbol \
   -H "Content-Type: application/json" \
-  -d '{"magellan_db_path":"forge","symbol_name":"patch_symbol","project_id":"forge"}'
+  -d '{"magellan_db_path":"myapp","symbol_name":"patch_symbol","project_id":"myapp"}'
 ```
 `magellan_db_path` accepts project name (auto-resolved) or full path.
 
@@ -246,14 +246,14 @@ curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/import-
 ```bash
 curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/import-magellan/all \
   -H "Content-Type: application/json" \
-  -d '{"magellan_db_path":"forge","project_id":"forge","limit":100}'
+  -d '{"magellan_db_path":"myapp","project_id":"myapp","limit":100}'
 ```
 
 ### List discovered magellan DBs
 ```bash
 curl -sf -H "X-Agent-Id: {agent}" http://127.0.0.1:9876/atheneum/import-magellan/dbs
 ```
-Returns: `{"dbs":[{"project":"forge","path":"~/Projects/forge/.magellan/forge.db"},...]}`
+Returns: `{"dbs":[{"project":"myapp","path":"~/Projects/forge/.magellan/forge.db"},...]}`
 
 ---
 
@@ -268,7 +268,7 @@ curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/actions
 
 ### Query actions
 ```bash
-curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/actions?agent=claude1&project=forge"
+curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/actions?agent=claude1&project=myapp"
 ```
 
 ---
@@ -279,7 +279,7 @@ curl -sf -H "X-Agent-Id: {agent}" "http://127.0.0.1:9876/atheneum/actions?agent=
 ```bash
 curl -sf -H "X-Agent-Id: {agent}" -X POST http://127.0.0.1:9876/atheneum/journals \
   -H "Content-Type: application/json" \
-  -d '{"path":"journal/2026-05-19.md","content":"## Progress\nShipped clippy fixes for mirage and llmgrep","project_id":"forge"}'
+  -d '{"path":"journal/2026-05-19.md","content":"## Progress\nShipped clippy fixes for mirage and llmgrep","project_id":"myapp"}'
 ```
 Returns: `{"section_ids":[...],"applied_kanban_updates":[...]}`
 

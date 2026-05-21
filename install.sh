@@ -6,13 +6,13 @@
 # For the full plugin experience, install the Claude Code plugin separately.
 #
 # Usage:
-#   curl -fsSL https://github.com/luizspies/grounded-coding/install.sh | sh
+#   curl -fsSL https://github.com/oldnordic/grounded-coding/install.sh | sh
 #   ./install.sh --dev          # build from local source (contributors)
 #   ./install.sh --version X.Y.Z  # install specific version
 #
 set -eu
 
-REPO="luizspies/grounded-coding"
+REPO="oldnordic/grounded-coding"
 PREFIX="${HOME}/.local/bin"
 TOOL_BINARIES="magellan llmgrep mirage splice"
 VERSION="latest"

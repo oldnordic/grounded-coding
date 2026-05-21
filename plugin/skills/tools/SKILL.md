@@ -405,7 +405,7 @@ AGENT_ID=$(curl -sf -X POST http://127.0.0.1:9876/agents \
   -d '{"name":"forge-session","kind":"claude"}' | jq -r '.agent_id')
 
 # 2. Use AGENT_ID for all subsequent requests
-curl -sf -H "X-Agent-Id: $AGENT_ID" http://127.0.0.1:9876/atheneum/knowledge?target=Symbol&project=forge
+curl -sf -H "X-Agent-Id: $AGENT_ID" http://127.0.0.1:9876/atheneum/knowledge?target=Symbol&project=myapp
 
 # 3. Retire when done (or before handoff)
 curl -sf -H "X-Agent-Id: $AGENT_ID" -X POST http://127.0.0.1:9876/agents/$AGENT_ID/retire
