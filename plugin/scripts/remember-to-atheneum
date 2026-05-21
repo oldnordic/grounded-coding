@@ -1,0 +1,188 @@
+#!/usr/bin/env fish
+
+# remember-to-atheneum
+# Ingest remember plugin .md files into atheneum knowledge graph
+# Usage: remember-to-atheneum [--project <name>] [--dry-run]
+
+# Configuration
+set ATHENEUM_DB "$ATHENEUM_DB"
+if test -z "$ATHENEUM_DB"
+    set ATHENEUM_DB "$HOME/.local/share/envoy/atheneum.db"
+end
+
+set -gx ENVOY_URL "http://127.0.0.1:9876"
+set -gx AGENT_NAME "remember-to-atheneum"
+
+# Parse arguments
+set project_name ""
+set dry_run false
+
+for i in (seq (count $argv))
+    switch $argv[$i]
+        case "--project"
+            set project_name $argv[(math $i + 1)]
+        case "--dry-run"
+            set dry_run true
+        case "--help"
+            echo "Usage: remember-to-atheneum [--project <name>] [--dry-run]"
+            echo ""
+            echo "Ingest remember plugin .md files into atheneum knowledge graph"
+            echo ""
+            echo "Options:"
+            echo "  --project <name>  Only process specific project"
+            echo "  --dry-run         Show what would be sent without sending"
+            exit 0
+    end
+end
+
+# Check if envoy is running
+if not systemctl --user is-active envoy > /dev/null 2>&1
+    echo "❌ envoy not running"
+    echo "Start with: systemctl --user start envoy"
+    exit 1
+end
+
+echo "📖 Remember → Atheneum Ingestion"
+echo "================================"
+
+# Function to store a discovery
+function store_discovery
+    set type $argv[1]
+    set target $argv[2]
+    set metadata $argv[3]
+
+    if test "$dry_run" = true
+        echo "  Would store: $type | $target"
+        return
+    end
+
+    # Build JSON payload and send via atheneum API
+    set json "{\"agent\": \"$AGENT_NAME\", \"discovery_type\": \"$type\", \"target\": \"$target\", \"metadata\": $metadata}"
+    curl -s -X POST "http://127.0.0.1:9876/atheneum/discoveries" \
+        -H "Content-Type: application/json" \
+        -d (echo $json | jq -c .) > /dev/null
+    set curl_status $status
+
+    # Report errors
+    if test $curl_status -ne 0
+        echo "  ❌ Failed to store: $type | $target (curl exit $curl_status)"
+    end
+end
+
+# Function to parse remember entry
+function parse_remember_entry
+    set entry $argv[1]
+    set project $argv[2]
+
+    # Entry format: ## HH:MM | branch\n<summary>
+    # The entry uses literal \n as line separator
+    set lines (string split "\\n" "$entry")
+    set header $lines[1]
+
+    # Extract time and branch using string split
+    # Remove ## prefix first
+    set header_clean (string replace -r "^## " "" $header)
+    # Split by " | "
+    set parts (string split " | " $header_clean)
+
+    if test (count $parts) -lt 2
+        return
+    end
+
+    set time $parts[1]
+    set branch $parts[2]
+
+    # Extract summary (everything after header)
+    if test (count $lines) -gt 1
+        set summary (string join "\\n" $lines[2..])
+    else
+        set summary ""
+    end
+
+    # Categorize discovery type from summary
+    set discovery_type "Session"
+
+    if string match -qi "fixed" $summary
+        set discovery_type "code_review"
+    else if string match -qi "bug" $summary
+        set discovery_type "Issue"
+    else if string match -qi "published" $summary
+        set discovery_type "git_operation"
+    else if string match -qi "test" $summary
+        set discovery_type "hook_result"
+    else if string match -qi "split" $summary
+        set discovery_type "documentation"
+    else if string match -qi "update" $summary
+        set discovery_type "documentation"
+    end
+
+    # Store discovery
+    set target "$project-remember-$time"
+
+    # Build metadata JSON using jq to avoid escaping issues
+    set metadata (echo "{\"project\": \"$project\", \"branch\": \"$branch\", \"time\": \"$time\", \"summary\": \"$summary\"}" | jq -c .)
+
+    store_discovery "$discovery_type" "$target" "$metadata"
+end
+
+# Find all remember directories
+set remember_dirs ()
+if test -n "$project_name"
+    set remember_dirs "$HOME/Projects/$project_name/.remember"
+else
+    set remember_dirs (find $HOME/Projects -maxdepth 2 -name ".remember" -type d 2>/dev/null)
+end
+
+set total_entries 0
+set total_projects 0
+
+for remember_dir in $remember_dirs
+    if not test -d "$remember_dir"
+        continue
+    end
+
+    set project (basename (dirname "$remember_dir"))
+    set now_file "$remember_dir/now.md"
+
+    if test -f "$now_file"
+        echo ""
+        echo "📁 $project"
+
+        # Parse each entry (entries start with ##)
+        set lines (cat "$now_file" | string split "\n")
+
+        set current_entry ""
+        for line in $lines
+            if string match -qr "^## " "$line"
+                # New entry - process previous one if exists
+                if test -n "$current_entry"
+                    parse_remember_entry "$current_entry" "$project"
+                    set total_entries (math $total_entries + 1)
+                end
+                set current_entry "$line"
+            else if test -n "$current_entry"
+                # Append line to current entry
+                set current_entry "$current_entry\n$line"
+            end
+        end
+
+        # Process last entry
+        if test -n "$current_entry"
+            parse_remember_entry "$current_entry" "$project"
+            set total_entries (math $total_entries + 1)
+        end
+
+        set total_projects (math $total_projects + 1)
+    end
+end
+
+echo ""
+echo "================================"
+echo "✓ Processed $total_projects projects"
+echo "✓ Ingested $total_entries remember entries"
+
+if test "$dry_run" = true
+    echo "(dry run - nothing actually sent)"
+end
+
+exit 0

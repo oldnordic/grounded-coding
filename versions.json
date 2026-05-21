@@ -1,0 +1,8 @@
+{
+  "1.0.0": {
+    "magellan": "3.3.13",
+    "llmgrep": "3.4.5",
+    "mirage-analyzer": "1.4.6",
+    "splice": "2.6.13"
+  }
+}

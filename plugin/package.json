@@ -1,0 +1,51 @@
+{
+  "name": "grounded-coding",
+  "version": "1.0.0",
+  "description": "Grounded coding environment — graph-powered code intelligence, TDD discipline, and verification gates for Claude Code",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fish \"${CLAUDE_PLUGIN_ROOT}/hooks/session-bootstrap.fish\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fish \"${CLAUDE_PLUGIN_ROOT}/hooks/protect-sensitive-paths.fish\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Evaluate this Bash command for destructive operations. Block if it contains any of: git reset --hard, git checkout -- ., git clean -f, rm -rf on project directories, --no-verify, --no-gpg-sign, git push --force to main or master. Allow if the user explicitly requested the destructive operation. Return JSON: {\"hookSpecificOutput\": {\"permissionDecision\": \"allow\"}} or {\"hookSpecificOutput\": {\"permissionDecision\": \"deny\"}, \"systemMessage\": \"reason\"}",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fish \"${CLAUDE_PLUGIN_ROOT}/hooks/verify-rust.fish\"",
+            "statusMessage": "Rust verification: fmt, check, clippy, test"
+          }
+        ]
+      }
+    ]
+  }
+}

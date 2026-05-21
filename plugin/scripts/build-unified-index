@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# build-unified-index - Build LLM-readable metadata index
+# Creates a summary file that tells LLMs "what exists where"
+
+set -euo pipefail
+
+# Detect active envoy/atheneum DB location
+detect_db_path() {
+    if [ -f "$HOME/.local/share/envoy/atheneum.db" ]; then
+        echo "$HOME/.local/share/envoy"
+    elif [ -f "$HOME/.envoy/atheneum.db" ]; then
+        echo "$HOME/.envoy"
+    else
+        echo "$HOME/.local/share/envoy"
+    fi
+}
+
+ENVOY_BASE="$(detect_db_path)"
+ENVOY_DB="$ENVOY_BASE/server.db"
+ATHENEUM_DB="$ENVOY_BASE/atheneum.db"
+WIKI_DIR="$HOME/wiki"
+OUTPUT_FILE="$WIKI_DIR/unified-knowledge-index.md"
+PROMPT="You are a documentation assistant. Create a knowledge index that lists what content exists in each system. Group by topic/project. Format as markdown with ## Topic headers and bullet points listing files/entries."
+
+echo "🏗️  Building Unified Knowledge Index..."
+echo ""
+
+# 1. Gather data from each source
+
+# Wiki: List all pages with tags/types
+echo "## Wiki Contents" > "$OUTPUT_FILE"
+echo "" >> "$OUTPUT_FILE"
+echo "**Pages:** $(find "$WIKI_DIR/pages" -name "*.md" 2>/dev/null | wc -l)" >> "$OUTPUT_FILE"
+echo "**Journals:** $(find "$WIKI_DIR/logseq/journals" -name "*.md" 2>/dev/null | wc -l)" >> "$OUTPUT_FILE"
+echo "" >> "$OUTPUT_FILE"
+
+# Get page categories
+echo "### By Category" >> "$OUTPUT_FILE"
+if [ -d "$WIKI_DIR/pages" ]; then
+    find "$WIKI_DIR/pages" -name "*.md" -exec grep -l "^type:" {} \; 2>/dev/null | \
+        while read -r file; do
+            type=$(grep "^type:" "$file" | cut -d: -f2 | xargs)
+            name=$(basename "$file")
+            echo "- [$type] $name" >> "$OUTPUT_FILE"
+        done
+fi
+echo "" >> "$OUTPUT_FILE"
+
+# Atheneum: Summarize discoveries
+if [ -f "$ATHENEUM_DB" ]; then
+    echo "## Atheneum Discoveries" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+    TOTAL=$(sqlite3 "$ATHENEUM_DB" "SELECT COUNT(*) FROM graph_entities WHERE kind='Discovery';" 2>/dev/null || echo "0")
+    echo "**Total:** $TOTAL discoveries" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+
+    echo "### By Type" >> "$OUTPUT_FILE"
+    sqlite3 "$ATHENEUM_DB" "
+        SELECT json_extract(data, '$.discovery_type'), COUNT(*)
+        FROM graph_entities
+        WHERE kind = 'Discovery'
+        GROUP BY json_extract(data, '$.discovery_type')
+    " 2>/dev/null | while read -r count_line; do
+        [ -n "$count_line" ] && echo "- $count_line" >> "$OUTPUT_FILE"
+    done
+    echo "" >> "$OUTPUT_FILE"
+
+    # Recent discoveries
+    echo "### Recent (last 20)" >> "$OUTPUT_FILE"
+    sqlite3 "$ATHENEUM_DB" "
+        SELECT name, json_extract(data, '$.discovery_type')
+        FROM graph_entities
+        WHERE kind = 'Discovery'
+        ORDER BY id DESC
+        LIMIT 20
+    " 2>/dev/null | while read -r line; do
+        [ -n "$line" ] && echo "- $line" >> "$OUTPUT_FILE"
+    done
+    echo "" >> "$OUTPUT_FILE"
+fi
+
+# Envoy: Message stats
+if [ -f "$ENVOY_DB" ]; then
+    echo "## Envoy Messages" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+    MSG_TOTAL=$(sqlite3 "$ENVOY_DB" "SELECT COUNT(*) FROM graph_entities WHERE kind='EnvoyMessage';" 2>/dev/null || echo "0")
+    AGENT_TOTAL=$(sqlite3 "$ENVOY_DB" "SELECT COUNT(*) FROM graph_entities WHERE kind='EnvoyAgent';" 2>/dev/null || echo "0")
+    echo "**Total:** $MSG_TOTAL messages" >> "$OUTPUT_FILE"
+    echo "**Agents:** $AGENT_TOTAL agents" >> "$OUTPUT_FILE"
+    echo "" >> "$OUTPUT_FILE"
+
+    # Get unique subjects/topics (from context_id)
+    echo "### Message Topics (sample)" >> "$OUTPUT_FILE"
+    sqlite3 "$ENVOY_DB" "
+        SELECT DISTINCT json_extract(data, '$.context_id')
+        FROM graph_entities
+        WHERE kind = 'EnvoyMessage' AND json_extract(data, '$.context_id') IS NOT NULL
+        LIMIT 30
+    " 2>/dev/null | while read -r subject; do
+        [ -n "$subject" ] && echo "- $subject" >> "$OUTPUT_FILE"
+    done
+    echo "" >> "$OUTPUT_FILE"
+fi
+
+# Add metadata footer
+echo "" >> "$OUTPUT_FILE"
+echo "---" >> "$OUTPUT_FILE"
+echo "" >> "$OUTPUT_FILE"
+echo "**Index Generated:** $(date '+%Y-%m-%d %H:%M')" >> "$OUTPUT_FILE"
+echo "**Sources:**" >> "$OUTPUT_FILE"
+echo "- Wiki: $WIKI_DIR" >> "$OUTPUT_FILE"
+echo "- Atheneum: $ATHENEUM_DB" >> "$OUTPUT_FILE"
+echo "- Envoy: $ENVOY_DB" >> "$OUTPUT_FILE"
+
+echo "✅ Index built: $OUTPUT_FILE"
+echo ""
+echo "📊 Index contents:"
+wc -l "$OUTPUT_FILE"

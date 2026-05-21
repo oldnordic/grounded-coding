@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# dream — Local agent memory curation pipeline
+# Wraps the Python dream tool with its venv.
+#
+# Usage:
+#   dream                           # dream current project
+#   dream --project magellan        # dream specific project
+#   dream --all                     # dream all projects
+#   dream --dry-run                 # preview without writing
+#   dream --force                   # run even if < 5 sessions
+#   dream --instructions "..."      # custom curation focus
+
+exec ~/.local/share/dream/.venv/bin/python -m dream "$@"

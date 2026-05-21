@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# wiki-categorize - Categorize wiki pages by topic using local Gemma 4 E2B
+# Usage: wiki-categorize [pages|journals|all]
+
+WIKI_DIR="$HOME/wiki"
+PROMPT="You are a documentation assistant. Categorize files by topic. Use ## Topic headers. List files under each topic. Keep descriptions brief."
+
+SCOPE="${1:-pages}"
+
+echo "📁 Categorizing wiki: $SCOPE"
+echo ""
+
+FILES=""
+case "$SCOPE" in
+    pages)
+        FILES=$(ls "$WIKI_DIR/pages"/*.md 2>/dev/null | grep -v Untitled | head -30)
+        ;;
+    journals)
+        FILES=$(ls -t "$WIKI_DIR/logseq/journals"/*.md 2>/dev/null | head -10)
+        ;;
+    all)
+        FILES=$(ls "$WIKI_DIR/pages"/*.md 2>/dev/null | grep -v Untitled | head -30)
+        ;;
+    *)
+        echo "Unknown scope: $SCOPE"
+        echo "Usage: wiki-categorize [pages|journals|all]"
+        exit 1
+        ;;
+esac
+
+if [ -z "$FILES" ]; then
+    echo "No files to categorize"
+    exit 1
+fi
+
+# Format files as list
+FILE_LIST=$(echo "$FILES" | xargs -I {} basename {} | sed 's/^/- /')
+
+# Create temporary JSON payload using jq
+PAYLOAD_FILE=$(mktemp)
+jq -n \
+  --arg model "gemma4:e2b" \
+  --arg prompt "$PROMPT" \
+  --arg files "$FILE_LIST" \
+  '{
+    model: $model,
+    messages: [
+      {role: "system", content: $prompt},
+      {role: "user", content: "Categorize these wiki files by topic:\n\n\($files)"}
+    ],
+    stream: false
+  }' > "$PAYLOAD_FILE"
+
+curl -s http://localhost:11434/api/chat -d @"$PAYLOAD_FILE" | jq -r '.message.content'
+rm -f "$PAYLOAD_FILE"
+
+echo ""
+COUNT=$(echo "$FILES" | wc -l | tr -d ' ')
+echo "📊 Total: $COUNT files"

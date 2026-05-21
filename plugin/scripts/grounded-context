@@ -1,0 +1,407 @@
+#!/usr/bin/env bash
+# grounded-context — Single CLI that composes magellan + llmgrep + mirage
+# into one compact context artifact for code tasks.
+#
+# Replaces the Explore-agent pattern: instead of reading 10-30 files,
+# returns a structured artifact with symbols, callers, callees, affected
+# files, risk notes, and estimated tokens saved.
+#
+# Usage:
+#   grounded-context --project /path/to/project --task "fix refresh FTS"
+#   grounded-context --db .magellan/magellan.db --symbol refresh
+#   grounded-context --db .magellan/magellan.db --file src/refresh.rs
+#   grounded-context --project . --task "what calls process_payment" --output json
+
+set -uo pipefail  # no -e — we handle errors ourselves
+
+# === Defaults ===
+PROJECT_DIR=""
+DB_PATH=""
+TASK=""
+SYMBOL=""
+FILE_PATH=""
+INCLUDE_CALLERS=false
+INCLUDE_CALLEES=false
+INCLUDE_AFFECTED=false
+INCLUDE_HOTSPOTS=false
+BUDGET=2500
+OUTPUT="human"
+WITH_SOURCE=false
+DEPTH=2
+
+# === Parse arguments ===
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --project)   PROJECT_DIR="$2"; shift 2 ;;
+        --db)        DB_PATH="$2"; shift 2 ;;
+        --task)      TASK="$2"; shift 2 ;;
+        --symbol)    SYMBOL="$2"; shift 2 ;;
+        --file)      FILE_PATH="$2"; shift 2 ;;
+        --callers)   INCLUDE_CALLERS=true; shift ;;
+        --callees)   INCLUDE_CALLEES=true; shift ;;
+        --affected)  INCLUDE_AFFECTED=true; shift ;;
+        --hotspots)  INCLUDE_HOTSPOTS=true; shift ;;
+        --budget)    BUDGET="$2"; shift 2 ;;
+        --output)    OUTPUT="$2"; shift 2 ;;
+        --with-source) WITH_SOURCE=true; shift ;;
+        --depth)     DEPTH="$2"; shift 2 ;;
+        --help|-h)   echo "Usage: grounded-context [--project DIR|--db PATH] (--task TEXT|--symbol NAME|--file PATH) [--callers] [--callees] [--affected] [--hotspots] [--budget N] [--output human|json|pretty] [--depth N] [--with-source]"; exit 0 ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+done
+
+# === Resolve project and DB ===
+if [[ -z "$DB_PATH" && -n "$PROJECT_DIR" ]]; then
+    cd "$PROJECT_DIR"
+    for candidate in ".magellan/magellan.db" ".magellan/llmgrep.db" ".magellan/mirage.db"; do
+        if [[ -f "$candidate" ]]; then
+            DB_PATH="$(pwd)/$candidate"
+            break
+        fi
+    done
+    if [[ -z "$DB_PATH" ]]; then
+        project_name=$(basename "$(pwd)")
+        if [[ -f ".magellan/$project_name.db" ]]; then
+            DB_PATH="$(pwd)/.magellan/$project_name.db"
+        fi
+    fi
+fi
+
+if [[ -z "$DB_PATH" ]]; then
+    if [[ "$OUTPUT" == "json" || "$OUTPUT" == "pretty" ]]; then
+        echo '{"error":"no_database","message":"No magellan database found. Run: magellan watch --root ./src --db .magellan/<project>.db --scan-initial"}'
+    else
+        echo "ERROR: No magellan database found."
+        echo "Run: magellan watch --root ./src --db .magellan/<project>.db --scan-initial"
+    fi
+    exit 1
+fi
+
+cd "$(dirname "$DB_PATH")/.." 2>/dev/null || true
+DB_REL="${DB_PATH#$(pwd)/}"
+PROJECT_NAME=$(basename "$(pwd)")
+
+# === Track commands run ===
+COMMANDS_RUN=()
+TOTAL_GRAPH_OUTPUT_BYTES=0
+AVOIDED_READ_BYTES=0
+
+# Global temp file for run_cmd — avoids subshell variable scoping
+_GC_TMPFILE=$(mktemp)
+_GC_COUNTER_FILE=$(mktemp)
+echo "0" > "$_GC_COUNTER_FILE"
+echo "0" > "$_GC_TMPFILE.bytes"
+trap 'rm -f "$_GC_TMPFILE" "$_GC_COUNTER_FILE" "$_GC_TMPFILE.bytes"' EXIT
+
+run_cmd() {
+    # Write command to counter file
+    local idx
+    idx=$(cat "$_GC_COUNTER_FILE")
+    echo "$idx:$*" >> "$_GC_COUNTER_FILE.cmds"
+    echo $((idx + 1)) > "$_GC_COUNTER_FILE"
+    
+    # Run command, capture output
+    "$@" > "$_GC_TMPFILE" 2>/dev/null || true
+    
+    # Track bytes
+    local bytes
+    bytes=$(wc -c < "$_GC_TMPFILE")
+    local prev
+    prev=$(cat "$_GC_TMPFILE.bytes")
+    echo $((prev + bytes)) > "$_GC_TMPFILE.bytes"
+    
+    cat "$_GC_TMPFILE"
+}
+
+get_commands_run() {
+    local count
+    count=$(cat "$_GC_COUNTER_FILE")
+    if [[ $count -eq 0 ]]; then
+        COMMANDS_RUN=()
+    else
+        mapfile -t COMMANDS_RUN < <(sed 's/^[0-9]*://' "$_GC_COUNTER_FILE.cmds" 2>/dev/null)
+    fi
+}
+
+get_total_bytes() {
+    cat "$_GC_TMPFILE.bytes"
+}
+
+# === Phase 1: Database status ===
+STATUS_JSON=$(run_cmd magellan status --db "$DB_PATH" --output json)
+if [[ -z "$STATUS_JSON" || "$STATUS_JSON" == "{}" ]]; then
+    STATUS_JSON=$(run_cmd magellan status --db "$DB_PATH" --output human | head -5)
+fi
+
+HEALTHY=true
+WARNINGS=()
+
+# === Helper: normalize magellan nested JSON ===
+normalize_magellan_json() {
+    local input="$1"
+    if command -v jq &>/dev/null && [[ -n "$input" && "$input" != "null" ]]; then
+        echo "$input" | jq '
+            if .data?.matches? then .data.matches
+            elif .data?.references? then .data.references
+            elif .data?.files? then .data.files
+            elif .data?.symbols? then .data.symbols
+            elif .data?.affected? then .data.affected
+            else . end
+        ' 2>/dev/null || echo "$input"
+    else
+        echo "$input"
+    fi
+}
+
+# === Phase 2: Find candidates ===
+CANDIDATES_JSON="[]"
+
+if [[ -n "$TASK" ]]; then
+    SEARCH_JSON=$(run_cmd llmgrep --db "$DB_PATH" search --query "$TASK" --output json --limit 10)
+
+    if [[ -z "$SEARCH_JSON" || "$SEARCH_JSON" == "[]" || "$SEARCH_JSON" == "null" ]]; then
+        WARNINGS+=("llmgrep returned 0 results for task query")
+        FIRST_WORD=$(echo "$TASK" | awk '{print $1}')
+        if [[ -n "$FIRST_WORD" ]]; then
+            SEARCH_JSON=$(normalize_magellan_json "$(run_cmd magellan find --db "$DB_PATH" --name "$FIRST_WORD" --output json)")
+        fi
+    else
+        SEARCH_JSON=$(normalize_magellan_json "$SEARCH_JSON")
+    fi
+
+    if [[ -n "$SEARCH_JSON" && "$SEARCH_JSON" != "[]" && "$SEARCH_JSON" != "null" ]]; then
+        CANDIDATES_JSON="$SEARCH_JSON"
+    fi
+
+elif [[ -n "$SYMBOL" ]]; then
+    FIND_JSON=$(normalize_magellan_json "$(run_cmd magellan find --db "$DB_PATH" --name "$SYMBOL" --output json)")
+    CANDIDATES_JSON="$FIND_JSON"
+
+    if [[ -z "$CANDIDATES_JSON" || "$CANDIDATES_JSON" == "[]" || "$CANDIDATES_JSON" == "null" ]]; then
+        WARNINGS+=("magellan find returned 0 results for symbol '$SYMBOL'")
+    fi
+
+elif [[ -n "$FILE_PATH" ]]; then
+    QUERY_JSON=$(normalize_magellan_json "$(run_cmd magellan query --db "$DB_PATH" --file "$FILE_PATH" --output json)")
+    CANDIDATES_JSON="$QUERY_JSON"
+    AVOIDED_READ_BYTES=$(stat -c %s "$FILE_PATH" 2>/dev/null || stat -f %z "$FILE_PATH" 2>/dev/null || echo 0)
+fi
+
+# === Phase 3: Expand context for top candidates ===
+CONTEXT_CALLERS="[]"
+CONTEXT_CALLEES="[]"
+CONTEXT_AFFECTED="[]"
+CONTEXT_HOTSPOTS="[]"
+SNIPPETS="[]"
+
+# Get top candidate names
+TOP_NAMES=()
+if command -v jq &>/dev/null && [[ -n "$CANDIDATES_JSON" && "$CANDIDATES_JSON" != "[]" && "$CANDIDATES_JSON" != "null" ]]; then
+    while IFS= read -r name; do
+        [[ -n "$name" ]] && TOP_NAMES+=("$name")
+    done < <(echo "$CANDIDATES_JSON" | jq -r '.[0:5][]?.name // empty' 2>/dev/null || true)
+fi
+
+if [[ ${#TOP_NAMES[@]} -gt 0 ]]; then
+    FIRST="${TOP_NAMES[0]}"
+
+    if [[ "$INCLUDE_CALLERS" == true || "$INCLUDE_CALLEES" == true || -n "$TASK" ]]; then
+        if [[ "$INCLUDE_CALLERS" == true || -n "$TASK" ]]; then
+            CONTEXT_CALLERS=$(normalize_magellan_json "$(run_cmd magellan refs --db "$DB_PATH" --name "$FIRST" --direction in --output json)")
+        fi
+        if [[ "$INCLUDE_CALLEES" == true || -n "$TASK" ]]; then
+            CONTEXT_CALLEES=$(normalize_magellan_json "$(run_cmd magellan refs --db "$DB_PATH" --name "$FIRST" --direction out --output json)")
+        fi
+    fi
+
+    if [[ "$INCLUDE_AFFECTED" == true || -n "$TASK" ]]; then
+        CONTEXT_AFFECTED=$(normalize_magellan_json "$(run_cmd magellan context affected --db "$DB_PATH" --name "$FIRST" --depth 3 --output json)")
+    fi
+
+    if [[ "$INCLUDE_HOTSPOTS" == true ]] || { [[ -n "$TASK" ]] && echo "$TASK" | grep -qiE "lock|mutex|rwlock|concurrent|deadlock|race|thread|async"; }; then
+        CONTEXT_HOTSPOTS=$(normalize_magellan_json "$(run_cmd mirage --db "$DB_PATH" hotspots --output json)")
+        CYCLES=$(run_cmd mirage --db "$DB_PATH" cycles --output json)
+        if [[ -n "$CYCLES" && "$CYCLES" != "[]" && "$CYCLES" != "null" && "$CYCLES" != "{}" ]]; then
+            WARNINGS+=("mirage found call cycles — check for deadlocks")
+        fi
+    fi
+
+    # Source snippets (only if --with-source)
+    if [[ "$WITH_SOURCE" == true ]]; then
+        for name in "${TOP_NAMES[@]:0:3}"; do
+            [[ -z "$name" ]] && continue
+            SNIP=$(run_cmd magellan context symbol --db "$DB_PATH" --name "$name" --depth 0 --with-source --output json)
+            if [[ -n "$SNIP" && "$SNIP" != "{}" && "$SNIP" != "null" ]]; then
+                SNIPPETS=$(echo "$SNIPPETS" | jq --arg name "$name" --arg snip "$SNIP" '. + [{"name": $name, "source": ($snip | tostring)}]' 2>/dev/null || echo "$SNIPPETS")
+            fi
+        done
+    fi
+fi
+
+# Calculate avoided tokens from candidate files
+if [[ ${#TOP_NAMES[@]} -gt 0 ]]; then
+    for name in "${TOP_NAMES[@]}"; do
+        [[ -z "$name" ]] && continue
+        CAND_FILE=$(echo "$CANDIDATES_JSON" | jq -r ".[] | select(.name==\"$name\") | .file // empty" 2>/dev/null | head -1 || echo "")
+        if [[ -n "$CAND_FILE" && -f "$CAND_FILE" ]]; then
+            CAND_BYTES=$(stat -c %s "$CAND_FILE" 2>/dev/null || stat -f %z "$CAND_FILE" 2>/dev/null || echo 0)
+            EST_AVOIDED=$((EST_AVOIDED + CAND_BYTES / 4))
+        fi
+    done
+fi
+
+# === Output ===
+# Reload tracking state from files (subshell-safe)
+get_commands_run
+TOTAL_GRAPH_OUTPUT_BYTES=$(get_total_bytes)
+
+TIMESTAMP=$(date -Iseconds 2>/dev/null || date)
+EST_OUTPUT_TOKENS=$((TOTAL_GRAPH_OUTPUT_BYTES / 4))
+EST_AVOIDED=$((AVOIDED_READ_BYTES / 4))
+WARNINGS_JSON=$(printf '%s\n' "${WARNINGS[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
+COMMANDS_JSON=$(printf '%s\n' "${COMMANDS_RUN[@]}" | jq -R . | jq -s . 2>/dev/null || echo "[]")
+
+if [[ "$OUTPUT" == "json" || "$OUTPUT" == "pretty" ]]; then
+    INDENT_FLAG=""
+    if [[ "$OUTPUT" == "pretty" ]]; then
+        INDENT_FLAG="--indent 2"
+    fi
+
+    jq -n $INDENT_FLAG \
+        --arg project "$PROJECT_NAME" \
+        --arg db "$DB_REL" \
+        --argjson status "$STATUS_JSON" \
+        --arg task "${TASK:-}" \
+        --arg symbol "${SYMBOL:-}" \
+        --arg file "${FILE_PATH:-}" \
+        --argjson candidates "$CANDIDATES_JSON" \
+        --argjson callers "$CONTEXT_CALLERS" \
+        --argjson callees "$CONTEXT_CALLEES" \
+        --argjson affected "$CONTEXT_AFFECTED" \
+        --argjson hotspots "$CONTEXT_HOTSPOTS" \
+        --argjson snippets "$SNIPPETS" \
+        --argjson commands "$COMMANDS_JSON" \
+        --argjson warnings "$WARNINGS_JSON" \
+        --argjson budget_limit "$BUDGET" \
+        --argjson est_output "$EST_OUTPUT_TOKENS" \
+        --argjson est_avoided "$EST_AVOIDED" \
+        '{
+            project: $project,
+            db: $db,
+            status: $status,
+            query: {
+                task: (if $task == "" then null else $task end),
+                symbol: (if $symbol == "" then null else $symbol end),
+                file: (if $file == "" then null else $file end)
+            },
+            candidates: $candidates,
+            context: {
+                callers: $callers,
+                callees: $callees,
+                affected: $affected,
+                hotspots: $hotspots
+            },
+            snippets: $snippets,
+            commands: $commands,
+            warnings: $warnings,
+            token_budget: {
+                limit: $budget_limit,
+                estimated_output: $est_output,
+                estimated_avoided: $est_avoided
+            }
+        }'
+else
+    # Human-readable output
+    echo "═══════════════════════════════════════════════════════════"
+    echo "  GROUNDED CONTEXT — $PROJECT_NAME"
+    echo "═══════════════════════════════════════════════════════════"
+    echo ""
+    echo "DB: $DB_REL"
+    echo ""
+
+    if [[ -n "$TASK" ]]; then
+        echo "Task: $TASK"
+    elif [[ -n "$SYMBOL" ]]; then
+        echo "Symbol: $SYMBOL"
+    elif [[ -n "$FILE_PATH" ]]; then
+        echo "File: $FILE_PATH"
+    fi
+    echo ""
+
+    # Candidates — handle both flat and span-nested formats
+    echo "─── Candidates ───"
+    if command -v jq &>/dev/null && [[ -n "$CANDIDATES_JSON" && "$CANDIDATES_JSON" != "[]" && "$CANDIDATES_JSON" != "null" ]]; then
+        echo "$CANDIDATES_JSON" | jq -r '
+            to_entries[0:5][] |
+            .value as $v |
+            (($v.span.file_path // $v.file // "?") | split("/") | last) as $f |
+            ($v.span.start_line // $v.start_line // $v.line // "?") as $l |
+            "  \(.key+1). \($v.name // "unknown") (\($v.kind // "?")) @ \($f):\($l)"
+        ' 2>/dev/null || echo "  (parse error — try --output json)"
+    else
+        echo "  No candidates found."
+        if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+            echo "  ${WARNINGS[0]}"
+        fi
+    fi
+    echo ""
+
+    # Callers/Callees
+    if [[ "$INCLUDE_CALLERS" == true && -n "$CONTEXT_CALLERS" && "$CONTEXT_CALLERS" != "[]" && "$CONTEXT_CALLERS" != "null" ]]; then
+        echo "─── Callers ───"
+        echo "$CONTEXT_CALLERS" | jq -r '.[0:10][] |
+            ((.span.file_path // .file_path // .file // "?") | split("/") | last) as $f |
+            (.span.start_line // .start_line // .line // "?") as $l |
+            (.referenced_symbol // .name // .) as $n |
+            "  <- \($n) (\($f):\($l))"
+        ' 2>/dev/null || echo "  (none)"
+        echo ""
+    fi
+
+    if [[ "$INCLUDE_CALLEES" == true && -n "$CONTEXT_CALLEES" && "$CONTEXT_CALLEES" != "[]" && "$CONTEXT_CALLEES" != "null" ]]; then
+        echo "─── Callees ───"
+        echo "$CONTEXT_CALLEES" | jq -r '.[0:10][] |
+            ((.span.file_path // .file_path // .file // "?") | split("/") | last) as $f |
+            (.span.start_line // .start_line // .line // "?") as $l |
+            (.referenced_symbol // .name // .) as $n |
+            "  -> \($n) (\($f):\($l))"
+        ' 2>/dev/null || echo "  (none)"
+        echo ""
+    fi
+
+    if [[ "$INCLUDE_AFFECTED" == true && -n "$CONTEXT_AFFECTED" && "$CONTEXT_AFFECTED" != "[]" && "$CONTEXT_AFFECTED" != "null" ]]; then
+        echo "─── Affected ───"
+        echo "$CONTEXT_AFFECTED" | jq -r '.[0:10][] |
+            ((.span.file_path // .file_path // .file // "?") | split("/") | last) as $f |
+            (.name // .symbol_name // .referenced_symbol // .) as $n |
+            "  ! \($n) (\($f))"
+        ' 2>/dev/null || echo "  (none)"
+        echo ""
+    fi
+
+    # Warnings
+    if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+        echo "─── Warnings ───"
+        for w in "${WARNINGS[@]}"; do
+            echo "  ⚠ $w"
+        done
+        echo ""
+    fi
+
+    # Token estimate
+    echo "─── Token Budget ───"
+    echo "  Estimated output:  ~$EST_OUTPUT_TOKENS tokens"
+    echo "  Estimated avoided: ~$EST_AVOIDED tokens (full file reads)"
+    echo "  Commands run:      ${#COMMANDS_RUN[@]}"
+    echo ""
+
+    # Commands provenance
+    echo "─── Commands ───"
+    i=0
+    while [[ $i -lt ${#COMMANDS_RUN[@]} ]]; do
+        echo "  ${COMMANDS_RUN[$i]}"
+        i=$((i + 1))
+    done
+    echo ""
+    echo "═══════════════════════════════════════════════════════════"
+fi

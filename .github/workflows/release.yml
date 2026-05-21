@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'grounded-coding/v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            platform: x86_64-linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build magellan
+        run: |
+          cargo install magellan --target ${{ matrix.target }} --root ./dist
+          strip ./dist/bin/magellan
+
+      - name: Build llmgrep
+        run: |
+          cargo install llmgrep --target ${{ matrix.target }} --root ./dist
+          strip ./dist/bin/llmgrep
+
+      - name: Build mirage
+        run: |
+          cargo install mirage-analyzer --target ${{ matrix.target }} --root ./dist
+          strip ./dist/bin/mirage
+
+      - name: Build splice
+        run: |
+          cargo install splice --target ${{ matrix.target }} --root ./dist
+          strip ./dist/bin/splice
+
+      - name: Package binaries
+        run: |
+          mkdir -p release
+          for tool in magellan llmgrep mirage splice; do
+            tar -czf release/${tool}-${{ matrix.platform }}.tar.gz -C ./dist/bin ${tool}
+          done
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum *.tar.gz > checksums.txt
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: release/
+
+  create-release:
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release/
+          merge-multiple: true
+
+      - name: Extract version from tag
+        id: version
+        env:
+          REF: ${{ github.ref }}
+        run: echo "VERSION=${REF#refs/tags/grounded-coding/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Grounded Coding v${{ steps.version.outputs.VERSION }}"
+          body: |
+            ## Grounded Coding ${{ steps.version.outputs.VERSION }}
+
+            ### Install
+
+            ```bash
+            curl -fsSL https://github.com/luizspies/grounded-coding/install.sh | sh
+            ```
+
+            ### What's Included
+
+            - **magellan** — Codebase indexing, symbol graph, context queries
+            - **llmgrep** — Semantic/structural queries over magellan DB
+            - **mirage** — CFG, paths, loops, dominance, hotspots
+            - **splice** — Span-safe refactoring, cross-file rename, slicing
+
+            ### Install via cargo (any platform)
+
+            ```bash
+            cargo install magellan llmgrep mirage-analyzer splice
+            ```
+
+            ### Claude Code Plugin
+
+            Install the `grounded-coding` plugin from the Claude Code marketplace for skills, hooks, and CLI helper scripts.
+          files: |
+            release/*.tar.gz
+            release/checksums.txt

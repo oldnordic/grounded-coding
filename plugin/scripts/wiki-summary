@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# wiki-summary - Summarize journal entries using local Gemma 4 E2B
+# Usage: wiki-summary [today|yesterday|YYYY-MM-DD]
+
+JOURNAL_DIR="$HOME/wiki/logseq/journals"
+PROMPT="You are a documentation assistant. Summarize journal entries concisely. Group related items. Use bullet points. Focus on: accomplishments, decisions, bugs fixed, and next steps."
+
+get_journal_date() {
+    local input="$1"
+    if [ -z "$input" ]; then
+        date +%Y_%m_%d
+    else
+        case "$input" in
+            today)
+                date +%Y_%m_%d
+                ;;
+            yesterday)
+                date -d "yesterday" +%Y_%m_%d 2>/dev/null || date -v-1d +%Y_%m_%d
+                ;;
+            *)
+                echo "$input" | sed 's/-/_/g'
+                ;;
+        esac
+    fi
+}
+
+DATE=$(get_journal_date "$1")
+JOURNAL_FILE="$JOURNAL_DIR/$DATE.md"
+
+if [ ! -f "$JOURNAL_FILE" ]; then
+    echo "Journal file not found: $JOURNAL_FILE"
+    echo "Available dates:"
+    ls -1 "$JOURNAL_DIR" | tail -5
+    exit 1
+fi
+
+echo "📖 Summarizing journal: $DATE.md"
+echo ""
+
+# Read journal content
+CONTENT=$(cat "$JOURNAL_FILE")
+
+# Create temporary JSON payload using jq
+PAYLOAD_FILE=$(mktemp)
+jq -n \
+  --arg model "gemma4:e2b" \
+  --arg prompt "$PROMPT" \
+  --arg content "$CONTENT" \
+  '{
+    model: $model,
+    messages: [
+      {role: "system", content: $prompt},
+      {role: "user", content: "Summarize this journal entry. Group accomplishments by project. List key decisions and next steps.\n\n\($content)"}
+    ],
+    stream: false
+  }' > "$PAYLOAD_FILE"
+
+curl -s http://localhost:11434/api/chat -d @"$PAYLOAD_FILE" | jq -r '.message.content'
+rm -f "$PAYLOAD_FILE"
+
+echo ""
+echo "---"
+echo "Full journal: $JOURNAL_FILE"

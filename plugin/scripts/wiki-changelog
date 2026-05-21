@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# wiki-changelog - Generate changelog from journal entries
+# Usage: wiki-changelog [today|yesterday|YYYY-MM-DD|days]
+
+JOURNAL_DIR="$HOME/wiki/logseq/journals"
+PROMPT="You are a documentation assistant. Extract changelog entries from the journal. Group by project. For each change, list: what changed, why, files/commits affected. Format as markdown with ## Project headers."
+
+# Parse date argument
+if [ -z "$1" ]; then
+    DATE=$(date +%Y_%m_%d)
+elif [ "$1" = "today" ]; then
+    DATE=$(date +%Y_%m_%d)
+elif [ "$1" = "yesterday" ]; then
+    DATE=$(date -d "yesterday" +%Y_%m_%d 2>/dev/null || date -v-1d +%Y_%m_%d)
+else
+    # Check if it's a number (days ago) or a date
+    if [[ "$1" =~ ^[0-9]+$ ]]; then
+        # Days ago
+        DATE=$(date -d "$1 days ago" +%Y_%m_%d 2>/dev/null || date -v-"$1"d +%Y_%m_%d)
+    else
+        # Specific date
+        DATE=$(echo "$1" | sed 's/-/_/g')
+    fi
+fi
+
+JOURNAL_FILE="$JOURNAL_DIR/$DATE.md"
+
+if [ ! -f "$JOURNAL_FILE" ]; then
+    echo "📝 Journal file not found: $JOURNAL_FILE"
+    echo ""
+    echo "Available dates:"
+    ls -1t "$JOURNAL_DIR" | head -10
+    exit 1
+fi
+
+echo "📝 Changelog for: $DATE"
+echo ""
+
+CONTENT=$(cat "$JOURNAL_FILE")
+
+# Build JSON payload
+PAYLOAD=$(jq -n \
+    --arg prompt "$PROMPT" \
+    --arg content "$CONTENT" \
+    --arg date "$DATE" \
+    '{
+        model: "gemma4:e2b",
+        messages: [
+            {role: "system", content: $prompt},
+            {role: "user", content: "Generate a changelog from this journal entry for \($date). Group by project. List: what changed, why, and relevant files/commits.\n\n\($content)"}
+        ],
+        stream: false
+    }')
+
+curl -s http://localhost:11434/api/chat -d "$PAYLOAD" | jq -r '.message.content'
+
+echo ""
+echo "---"
+echo ""
+echo "📄 Source: $JOURNAL_FILE"

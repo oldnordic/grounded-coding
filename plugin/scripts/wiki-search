@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# wiki-search - Search wiki for topics using local Gemma 4 E2B
+# Usage: wiki-search <query> [pages|journals|all]
+
+WIKI_DIR="$HOME/wiki"
+PROMPT="You are a documentation assistant. Search documentation and extract relevant information. Be specific. Cite sources as file:line format."
+
+if [ -z "$1" ]; then
+    echo "Usage: wiki-search <query> [scope]"
+    echo "Example: wiki-search 'magellan schema' pages"
+    exit 1
+fi
+
+QUERY="$1"
+SCOPE="${2:-pages}"
+
+echo "🔍 Searching wiki for: $QUERY"
+echo ""
+
+# Find relevant files
+SEARCH_PATH=""
+case "$SCOPE" in
+    pages)
+        SEARCH_PATH="$WIKI_DIR/pages"
+        ;;
+    journals)
+        SEARCH_PATH="$WIKI_DIR/logseq/journals"
+        ;;
+    all)
+        SEARCH_PATH="$WIKI_DIR"
+        ;;
+    *)
+        echo "Unknown scope: $SCOPE"
+        echo "Valid scopes: pages, journals, all"
+        exit 1
+        ;;
+esac
+
+FILES=$(grep -r -l "$QUERY" "$SEARCH_PATH" --include="*.md" 2>/dev/null | head -5)
+
+if [ -z "$FILES" ]; then
+    echo "No matches found"
+    exit 0
+fi
+
+echo "Found $(echo "$FILES" | wc -l | tr -d ' ') matches:"
+echo "$FILES" | sed "s|$WIKI_DIR||" | sed 's/^/  - /'
+echo ""
+
+# Read matching files and extract info
+CONTENT=""
+while IFS= read -r file; do
+    CONTENT="$CONTENT### $(basename "$file")"$'\n\n'
+    CONTENT="$CONTENT$(head -50 "$file")"$'\n\n'
+done <<< "$FILES"
+
+# Create temporary JSON payload - escape content properly
+PAYLOAD_FILE=$(mktemp)
+jq -n \
+  --arg model "gemma4:e2b" \
+  --arg prompt "$PROMPT" \
+  --arg query "$QUERY" \
+  --arg content "$CONTENT" \
+  '{
+    model: $model,
+    messages: [
+      {role: "system", content: $prompt},
+      {role: "user", content: "Search these files for information about: \($query)\n\nExtract relevant details and cite sources.\n\n\($content)"}
+    ],
+    stream: false
+  }' > "$PAYLOAD_FILE"
+
+curl -s http://localhost:11434/api/chat -d @"$PAYLOAD_FILE" | jq -r '.message.content'
+rm -f "$PAYLOAD_FILE"

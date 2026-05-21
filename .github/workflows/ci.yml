@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck fish
+
+      - name: Shellcheck install.sh
+        run: shellcheck -s sh install.sh
+
+      - name: Fish syntax check hooks
+        run: |
+          for f in plugin/hooks/*.fish; do
+            fish -n "$f" || exit 1
+          done
+
+      - name: Fish syntax check scripts
+        run: |
+          for f in plugin/scripts/*.fish; do
+            fish -n "$f" || exit 1
+          done
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate package.json
+        run: python3 -c "import json; json.load(open('plugin/package.json'))"
+
+      - name: Validate SKILL.md frontmatter
+        run: |
+          for skill_dir in plugin/skills/*/; do
+            SKILL_FILE="${skill_dir}SKILL.md"
+            if [ ! -f "$SKILL_FILE" ]; then
+              echo "Missing SKILL.md in $skill_dir"
+              exit 1
+            fi
+            if ! grep -q "^name:" "$SKILL_FILE"; then
+              echo "Missing 'name' in $SKILL_FILE"
+              exit 1
+            fi
+            if ! grep -q "^description:" "$SKILL_FILE"; then
+              echo "Missing 'description' in $SKILL_FILE"
+              exit 1
+            fi
+          done
+
+      - name: Validate versions.json
+        run: python3 -c "import json; json.load(open('versions.json'))"
+
+  install-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test dev install
+        run: |
+          mkdir -p /tmp/test-home/.local/bin
+          ./install.sh --dev --prefix /tmp/test-home/.local/bin
+
+      - name: Verify binaries exist
+        run: |
+          for tool in magellan llmgrep mirage splice; do
+            test -x "/tmp/test-home/.local/bin/$tool" || { echo "$tool not found"; exit 1; }
+          done
+
+      - name: Verify scripts are present in plugin
+        run: |
+          count=$(find plugin/scripts/ -type f | wc -l)
+          echo "Found $count scripts"
+          test "$count" -ge 15
+
+      - name: Verify skills are present
+        run: |
+          count=$(find plugin/skills/ -name "SKILL.md" | wc -l)
+          echo "Found $count skills"
+          test "$count" -ge 10
+
+      - name: Verify hooks are present
+        run: |
+          count=$(find plugin/hooks/ -name "*.fish" | wc -l)
+          echo "Found $count hooks"
+          test "$count" -ge 3

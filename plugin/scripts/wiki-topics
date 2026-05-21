@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# wiki-topics - Extract topics and tags from wiki using local Gemma 4 E2B
+# Usage: wiki-topics [query]
+
+WIKI_DIR="$HOME/wiki"
+PROMPT="You are a documentation assistant. Extract topics, tags, and key themes. Group related items. Output as: ## Topic, then bullet points with file:line references."
+
+extract_from_journal() {
+    local journal="$WIKI_DIR/logseq/journals/$(date +%Y_%m_%d).md"
+    if [ -f "$journal" ]; then
+        cat "$journal"
+    else
+        echo "Today's journal not found"
+    fi
+}
+
+search_wiki() {
+    local query="$1"
+    if [ -z "$query" ]; then
+        echo "Usage: wiki-topics <search-term>"
+        exit 1
+    fi
+
+    local files=$(grep -r -l "$query" "$WIKI_DIR" --include="*.md" 2>/dev/null | head -10)
+    if [ -z "$files" ]; then
+        echo "No matches found for: $query"
+        exit 0
+    fi
+
+    while IFS= read -r file; do
+        echo "### $(basename "$file")"
+        head -30 "$file"
+        echo ""
+    done <<< "$files"
+}
+
+echo "🏷️  Extracting topics from wiki"
+echo ""
+
+if [ -n "$1" ]; then
+    # Search mode
+    CONTENT=$(search_wiki "$1")
+else
+    # Today's journal mode
+    CONTENT=$(extract_from_journal)
+fi
+
+if [ -z "$CONTENT" ]; then
+    exit 0
+fi
+
+# Create temporary JSON payload using jq
+PAYLOAD_FILE=$(mktemp)
+jq -n \
+  --arg model "gemma4:e2b" \
+  --arg prompt "$PROMPT" \
+  --arg content "$CONTENT" \
+  '{
+    model: $model,
+    messages: [
+      {role: "system", content: $prompt},
+      {role: "user", content: "Extract topics, projects mentioned, and action items from this content. Group by topic.\n\n\($content)"}
+    ],
+    stream: false
+  }' > "$PAYLOAD_FILE"
+
+curl -s http://localhost:11434/api/chat -d @"$PAYLOAD_FILE" | jq -r '.message.content'
+rm -f "$PAYLOAD_FILE"

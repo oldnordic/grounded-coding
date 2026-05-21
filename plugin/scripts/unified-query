@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# unified-query - Query across envoy, atheneum, and wiki
+# Usage: unified-query <search-term>
+
+ENVOY_DB="$HOME/.envoy/server.db"
+ATHENEUM_DB="$HOME/.envoy/atheneum.db"
+WIKI_DIR="$HOME/wiki"
+PROMPT="You are a search assistant. Given search results from multiple sources, summarize what was found and where to look for more details. Be brief."
+
+if [ -z "$1" ]; then
+    echo "Usage: unified-query <search-term>"
+    echo "Example: unified-query 'magellan watch'"
+    exit 1
+fi
+
+QUERY="$1"
+echo "🔍 Unified Query: $QUERY"
+echo ""
+
+# 1. Search Atheneum discoveries
+echo "## Atheneum Discoveries"
+ATHENEUM_QUERY="SELECT id, name FROM graph_entities WHERE kind = 'Discovery' AND name LIKE '%$QUERY%' LIMIT 5;"
+atheneum_results=$(sqlite3 "$ATHENEUM_DB" "$ATHENEUM_QUERY")
+if [ -n "$atheneum_results" ]; then
+    echo "$atheneum_results"
+else
+    echo "No discoveries found"
+fi
+echo ""
+
+# 2. Search Envoy messages
+echo "## Envoy Messages"
+ENVOY_QUERY="SELECT id, name FROM graph_entities WHERE kind = 'EnvoyMessage' AND (name LIKE '%$QUERY%' OR data LIKE '%$QUERY%') ORDER BY id DESC LIMIT 5;"
+envoy_results=$(sqlite3 "$ENVOY_DB" "$ENVOY_QUERY")
+if [ -n "$envoy_results" ]; then
+    echo "$envoy_results"
+else
+    echo "No messages found"
+fi
+echo ""
+
+# 3. Search Wiki
+echo "## Wiki Pages"
+wiki_files=$(grep -r -l "$QUERY" "$WIKI_DIR" --include="*.md" 2>/dev/null | head -5)
+if [ -n "$wiki_files" ]; then
+    echo "$wiki_files" | sed "s|$WIKI_DIR||" | sed 's/^/- /'
+else
+    echo "No wiki pages found"
+fi
+echo ""
+
+# 4. Use E2B to summarize
+echo "## Summary"
+PAYLOAD=$(jq -n \
+    --arg prompt "$PROMPT" \
+    --arg query "$QUERY" \
+    --arg atheneum "$atheneum_results" \
+    --arg envoy "$envoy_results" \
+    --arg wiki "$wiki_files" \
+    '{
+        model: "gemma4:e2b",
+        messages: [
+            {role: "system", content: $prompt},
+            {role: "user", content: "Search results for \"\($query)\":\n\nAtheneum:\n\($atheneum)\n\nEnvoy:\n\($envoy)\n\nWiki:\n\($wiki)\n\nSummarize what was found and where to look for details."}
+        ],
+        stream: false
+    }')
+
+curl -s http://localhost:11434/api/chat -d "$PAYLOAD" | jq -r '.message.content'

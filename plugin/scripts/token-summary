@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# token-summary — Print current session token usage summary
+#
+# Reads from .claude/token-session-summary.json (rolling) and
+# .claude/token-session.jsonl (per-read log).
+#
+# Usage:
+#   token-summary              # current project
+#   token-summary /path/to/prj # specific project
+
+set -uo pipefail
+
+PROJECT_DIR="${1:-.}"
+SUMMARY="$PROJECT_DIR/.claude/token-session-summary.json"
+SESSION_LOG="$PROJECT_DIR/.claude/token-session.jsonl"
+
+if ! test -f "$SUMMARY"; then
+    echo "No token session data found in $PROJECT_DIR"
+    echo "Token tracking starts automatically when files are read."
+    exit 0
+fi
+
+echo "=== Token Session Summary ==="
+echo ""
+
+# Session metadata
+SESSION_START=$(jq -r '.session_start // "unknown"' "$SUMMARY")
+LAST_UPDATED=$(jq -r '.last_updated // "unknown"' "$SUMMARY")
+TOTAL_TOKENS=$(jq '.total_tokens // 0' "$SUMMARY")
+TOTAL_READS=$(jq '.total_reads // 0' "$SUMMARY")
+
+echo "Session: $SESSION_START → $LAST_UPDATED"
+echo "Total file reads: $TOTAL_READS"
+echo "Estimated tokens consumed: $TOTAL_TOKENS"
+
+COST=$(echo "scale=4; $TOTAL_TOKENS * 3 / 1000000" | bc 2>/dev/null || echo "N/A")
+echo "Estimated cost: ~$COST USD (Opus input rate)"
+echo ""
+
+# By tool breakdown
+echo "--- By Tool ---"
+jq -r '.by_tool // {} | to_entries[] | "  \(.key): \(.value) tokens"' "$SUMMARY" 2>/dev/null
+if ! jq -e '.by_tool | length > 0' "$SUMMARY" >/dev/null 2>&1; then
+    echo "  (no data)"
+fi
+echo ""
+
+# Top files by token usage
+echo "--- Top Files by Token Usage ---"
+jq -r '.by_file // {} | to_entries | sort_by(-.value) | limit(10; .[]) | "  \(.key): \(.value) tokens"' "$SUMMARY" 2>/dev/null
+if ! jq -e '.by_file | length > 0' "$SUMMARY" >/dev/null 2>&1; then
+    echo "  (no data)"
+fi
+echo ""
+
+# Per-read log stats if available
+if test -f "$SESSION_LOG"; then
+    READ_COUNT=$(wc -l < "$SESSION_LOG" | tr -d ' ')
+    UNIQUE_FILES=$(jq -r '.file' "$SESSION_LOG" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+    echo "--- Read Log ---"
+    echo "  Total reads logged: $READ_COUNT"
+    echo "  Unique files read: $UNIQUE_FILES"
+fi
+
+echo ""
+echo "Note: Token estimates are bytes/4. Actual token counts may vary."
