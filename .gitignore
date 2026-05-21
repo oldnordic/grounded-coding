@@ -1,6 +1,78 @@
+# Rust build artifacts
 target/
-.magellan/
+
+# Worktrees
+.worktrees/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Database files
 *.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-*
+
+# Cache directories
+.fastembed_cache/
+.cargo-cache/
+.cargo/
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Backup files
+*.bak
+*.backup
+*.orig
+*.rej
+
+# Environment files
 .env
-.env.*
-*.local
+.env.local
+.env.*.local
+
+# Coverage reports
+tarpaulin-report.html
+cobertura.xml
+
+# Benchmark outputs
+*.json.bak
+benchmark_results/
+
+# Magellan index
+.magellan/
+
+# Agent instructions — local only
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.mcp.json
+.mcp/
+
+# Claude working directories
+.claude/
+.hermes/
+
+# Splice working directories
+.splice/
+.splice-backup/
+
+# Generated archives
+*.zip
+*.tar.gz
+*.tgz
+*.rar
