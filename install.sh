@@ -55,14 +55,22 @@ mkdir -p "$PREFIX"
 
 if [ "$DEV_MODE" = true ]; then
     info "Dev mode: building from local source"
+    CARGO_ROOT=$(mktemp -d)
     for tool in $TOOL_BINARIES; do
         case "$tool" in
             mirage) crate="mirage-analyzer" ;;
             *)      crate="$tool" ;;
         esac
         info "Installing $crate from source..."
-        cargo install "$crate" --force --root "$PREFIX" 2>&1 || warn "Failed to build $crate"
+        cargo install "$crate" --force --root "$CARGO_ROOT" 2>&1 || warn "Failed to build $crate"
     done
+    # cargo puts binaries in $root/bin/ — move them to $PREFIX
+    for tool in $TOOL_BINARIES; do
+        if [ -f "$CARGO_ROOT/bin/$tool" ]; then
+            mv "$CARGO_ROOT/bin/$tool" "$PREFIX/$tool"
+        fi
+    done
+    rm -rf "$CARGO_ROOT"
     info "Dev install complete"
     exit 0
 fi
