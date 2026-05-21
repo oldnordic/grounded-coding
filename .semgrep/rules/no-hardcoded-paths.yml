@@ -1,0 +1,25 @@
+rules:
+  - id: shell-hardcoded-home-path
+    patterns:
+      - pattern: /home/$USER
+      - pattern-not: /tmp/test-home
+    message: "Hardcoded /home/ path found. Use $HOME or relative paths for portability."
+    severity: ERROR
+    languages: [bash, fish]
+    paths:
+      include:
+        - plugin/hooks/
+        - plugin/scripts/
+        - install.sh
+
+  - id: shell-secret-in-script
+    patterns:
+      - pattern-regex: (API_KEY|SECRET|PASSWORD|TOKEN)\s*=\s*["'][^"']+["']
+    message: "Possible hardcoded secret in script. Use environment variables instead."
+    severity: ERROR
+    languages: [bash, fish]
+    paths:
+      include:
+        - plugin/hooks/
+        - plugin/scripts/
+        - install.sh

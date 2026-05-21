@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, master]
   push:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
   lint:
@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install shellcheck
+      - name: Install shellcheck + fish
         run: sudo apt-get update && sudo apt-get install -y shellcheck fish
 
       - name: Shellcheck install.sh
@@ -34,6 +34,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check for hardcoded personal paths
+        run: |
+          if grep -rn '/home/' . --include='*.md' --include='*.fish' --include='*.sh' --include='*.json' --include='*.yml' 2>/dev/null | grep -v '.git/' | grep -v 'tmp/test-home'; then
+            echo "FAIL: hardcoded /home/ paths found"
+            exit 1
+          fi
+          echo "No hardcoded personal paths"
 
       - name: Validate package.json
         run: python3 -c "import json; json.load(open('plugin/package.json'))"
@@ -78,20 +86,36 @@ jobs:
             test -x "/tmp/test-home/.local/bin/$tool" || { echo "$tool not found"; exit 1; }
           done
 
-      - name: Verify scripts are present in plugin
+      - name: Verify plugin completeness
         run: |
-          count=$(find plugin/scripts/ -type f | wc -l)
-          echo "Found $count scripts"
-          test "$count" -ge 15
+          skills=$(find plugin/skills/ -name "SKILL.md" | wc -l)
+          hooks=$(find plugin/hooks/ -name "*.fish" | wc -l)
+          scripts=$(find plugin/scripts/ -type f | wc -l)
+          echo "Skills: $skills, Hooks: $hooks, Scripts: $scripts"
+          test "$skills" -ge 12
+          test "$hooks" -ge 3
+          test "$scripts" -ge 15
 
-      - name: Verify skills are present
-        run: |
-          count=$(find plugin/skills/ -name "SKILL.md" | wc -l)
-          echo "Found $count skills"
-          test "$count" -ge 10
+  gitleaks:
+    name: Gitleaks Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Verify hooks are present
+      - name: Install and run Gitleaks
         run: |
-          count=$(find plugin/hooks/ -name "*.fish" | wc -l)
-          echo "Found $count hooks"
-          test "$count" -ge 3
+          curl -sL https://github.com/zricethezav/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --verbose --config .gitleaks.toml
+
+  semgrep:
+    name: Semgrep Security Scan
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Semgrep OSS scan
+        run: semgrep ci --oss-only --config .semgrep/rules/

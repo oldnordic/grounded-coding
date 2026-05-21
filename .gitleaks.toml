@@ -1,0 +1,23 @@
+title = "Project Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+paths = [
+  '''\.mcp\.json$''',
+  '''\.magellan\/''',
+  '''target\/''',
+  '''\.git\/''',
+  '''\.cargo\/''',
+  '''Cargo\.lock$''',
+]
+
+regexes = [
+  '''YOUR_''',
+  '''example''',
+  '''placeholder''',
+  '''dummy''',
+  '''test_key''',
+  '''fake_token''',
+]
